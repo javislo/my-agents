@@ -5,7 +5,7 @@
 """
 import json, os, sys, urllib.request
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 PROMPTS = {
     "transcript": (
         "請輸出這支影片的完整逐字稿。格式：每行 `[mm:ss] 說話內容`，保留原語言；"
