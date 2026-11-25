@@ -3,9 +3,10 @@
 用法: python3 scripts/gemini_youtube.py <youtube_url> <mode: transcript|vision> [輸出檔]
 金鑰由雲端環境的 Network secret 自動注入（header: x-goog-api-key），程式只送佔位值。
 """
-import json, os, sys, urllib.request
+import json, os, sys, time, urllib.request
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+MODELS = [os.environ["GEMINI_MODEL"]] if os.environ.get("GEMINI_MODEL") else [
+    "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.7-flash", "gemini-3.5-flash"]
 PROMPTS = {
     "transcript": (
         "請輸出這支影片的完整逐字稿。格式：每行 `[mm:ss] 說話內容`，保留原語言；"
@@ -23,17 +24,33 @@ def main():
         sys.exit(__doc__)
     url, mode = sys.argv[1], sys.argv[2]
     body = {"contents": [{"parts": [{"file_data": {"file_uri": url}}, {"text": PROMPTS[mode]}]}]}
-    req = urllib.request.Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
-        data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json",
-                 "x-goog-api-key": os.environ.get("GEMINI_API_KEY", "proxy-injected")},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=600) as r:
-            data = json.load(r)
-    except urllib.error.HTTPError as e:
-        sys.exit(f"Gemini API 錯誤 {e.code}: {e.read().decode()[:800]}")
+    data = None
+    for model in MODELS:
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json",
+                     "x-goog-api-key": os.environ.get("GEMINI_API_KEY", "proxy-injected")},
+        )
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(req, timeout=600) as r:
+                    data = json.load(r)
+                print(f"使用模型：{model}", file=sys.stderr)
+                break
+            except urllib.error.HTTPError as e:
+                err = e.read().decode()[:800]
+                if e.code in (429, 500, 502, 503, 504):
+                    print(f"{model} 忙線 ({e.code})，重試/換模型…", file=sys.stderr)
+                    time.sleep(10)
+                    continue
+                if e.code == 404:
+                    break
+                sys.exit(f"Gemini API 錯誤 {e.code}: {err}")
+        if data:
+            break
+    if not data:
+        sys.exit("所有 Gemini 模型都忙線或不可用，請稍後再試。")
     text = "".join(p.get("text", "") for c in data.get("candidates", [])
                    for p in c.get("content", {}).get("parts", []))
     out = f"# {mode}: {url}\n\n{text}\n"
